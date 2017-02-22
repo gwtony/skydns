@@ -19,6 +19,7 @@ const (
 	SCacheCapacity = 10000
 	RCacheCapacity = 100000
 	RCacheTtl      = 60
+	Ndots          = 2
 )
 
 // Config provides options to the SkyDNS resolver.
@@ -58,6 +59,8 @@ type Config struct {
 	RCacheTtl int `json:"rcache_ttl,omitempty"`
 	// How many labels a name should have before we allow forwarding. Default to 2.
 	Ndots int `json:"ndot,omitempty"`
+	// Etcd flag that dictates if etcd version 3 is supported during skydns' run. Default to false.
+	Etcd3 bool
 
 	// DNSSEC key material
 	PubKey  *dns.DNSKEY   `json:"-"`
@@ -112,7 +115,7 @@ func SetDefaults(config *Config) error {
 		config.RCacheTtl = RCacheTtl
 	}
 	if config.Ndots <= 0 {
-		config.Ndots = 2
+		config.Ndots = Ndots
 	}
 
 	if len(config.Nameservers) == 0 {

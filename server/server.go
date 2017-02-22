@@ -359,7 +359,7 @@ func (s *server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		m.Answer = append(m.Answer, records...)
 		m.Extra = append(m.Extra, extra...)
 	case dns.TypeA, dns.TypeAAAA:
-		records, err := s.AddressRecords(q, name, nil, bufsize, dnssec, false, strings.Split(w.RemoteAddr().String(), ":")[0])
+		records, err := s.AddressRecords(q, name, nil, bufsize, dnssec, false)
 		if isEtcdNameError(err, s) {
 			m = s.NameError(req)
 			return
@@ -418,7 +418,7 @@ func (s *server) ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 }
 
-func (s *server) AddressRecords(q dns.Question, name string, previousRecords []dns.RR, bufsize uint16, dnssec, both bool, remote string) (records []dns.RR, err error) {
+func (s *server) AddressRecords(q dns.Question, name string, previousRecords []dns.RR, bufsize uint16, dnssec, both bool) (records []dns.RR, err error) {
 	services, err := s.backend.Records(name, false)
 	if err != nil {
 		return nil, err
@@ -427,15 +427,7 @@ func (s *server) AddressRecords(q dns.Question, name string, previousRecords []d
 	services = msg.Group(services)
 
 	for _, serv := range services {
-
 		ip := net.ParseIP(serv.Host)
-		if serv.View != "" {
-			srcip := net.ParseIP(remote)
-			mask := net.IPMask(net.ParseIP(serv.Mask))
-			if !net.ParseIP(serv.View).Equal(srcip.Mask(mask)) {
-				continue
-			}
-		}
 		switch {
 		case ip == nil:
 			// Try to resolve as CNAME if it's not an IP, but only if we don't create loops.
@@ -457,7 +449,7 @@ func (s *server) AddressRecords(q dns.Question, name string, previousRecords []d
 			}
 
 			nextRecords, err := s.AddressRecords(dns.Question{Name: dns.Fqdn(serv.Host), Qtype: q.Qtype, Qclass: q.Qclass},
-				strings.ToLower(dns.Fqdn(serv.Host)), append(previousRecords, newRecord), bufsize, dnssec, both, remote)
+				strings.ToLower(dns.Fqdn(serv.Host)), append(previousRecords, newRecord), bufsize, dnssec, both)
 			if err == nil {
 				// Only have we found something we should add the CNAME and the IP addresses.
 				if len(nextRecords) > 0 {
@@ -582,7 +574,7 @@ func (s *server) SRVRecords(q dns.Question, name string, bufsize uint16, dnssec 
 			// Clients expect a complete answer, because we are a recursor in their
 			// view.
 			addr, e1 := s.AddressRecords(dns.Question{srv.Target, dns.ClassINET, dns.TypeA},
-				srv.Target, nil, bufsize, dnssec, true, "")
+				srv.Target, nil, bufsize, dnssec, true)
 			if e1 == nil {
 				extra = append(extra, addr...)
 			}
@@ -645,7 +637,7 @@ func (s *server) MXRecords(q dns.Question, name string, bufsize uint16, dnssec b
 			}
 			// Internal name
 			addr, e1 := s.AddressRecords(dns.Question{mx.Mx, dns.ClassINET, dns.TypeA},
-				mx.Mx, nil, bufsize, dnssec, true, "")
+				mx.Mx, nil, bufsize, dnssec, true)
 			if e1 == nil {
 				extra = append(extra, addr...)
 			}
@@ -763,15 +755,28 @@ func (s *server) RoundRobin(rrs []dns.RR) {
 
 	switch l := len(rrs); l {
 	case 2:
+		if rrs[0].Header().Rrtype == dns.TypeCNAME {
+			return
+		}
 		if dns.Id()%2 == 0 {
 			rrs[0], rrs[1] = rrs[1], rrs[0]
 		}
 	default:
+		pos := 0
+		if len(rrs) > 0 {
+			for {
+				if rrs[pos].Header().Rrtype == dns.TypeCNAME {
+					pos++
+					continue
+				}
+				break
+			}
+		}
 		for j := 0; j < l*(int(dns.Id())%4+1); j++ {
-			q := int(dns.Id()) % l
-			p := int(dns.Id()) % l
+			q := (int(dns.Id()) % (l - pos)) + pos
+			p := (int(dns.Id()) % (l - pos)) + pos
 			if q == p {
-				p = (p + 1) % l
+				p = ((p + 1) % (l - pos)) + pos
 			}
 			rrs[q], rrs[p] = rrs[p], rrs[q]
 		}
